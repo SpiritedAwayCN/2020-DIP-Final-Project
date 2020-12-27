@@ -1,0 +1,6 @@
+*.bmp
+*.pdf
+*.docx
+
+.vscode
+.ipynb_checkpoints
