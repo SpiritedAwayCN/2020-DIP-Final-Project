@@ -338,12 +338,16 @@ def recg_all_qrcodes(qr_dir, result_file):
 
     results = {}
     for file_name in tqdm(os.listdir(qr_dir)):
-        img = cv2.imread(os.path.join(qr_dir, file_name))
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        status, result = process_qr(img)
-        results[file_name] = result
-        if status != -1:
-            counter[status] += 1
+        try:
+            img = cv2.imread(os.path.join(qr_dir, file_name))
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            status, result = process_qr(img)
+            results[file_name] = result
+            if status != -1:
+                counter[status] += 1
+        except Exception as e:
+            print("\nFail at {}: {}, skipped".format(file_name, e.args[0]))
+        
     
     pairs = sorted(results.items(), key=lambda x: x[0])
     with open(result_file, 'w') as f:
