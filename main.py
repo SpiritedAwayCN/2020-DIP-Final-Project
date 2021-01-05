@@ -336,14 +336,19 @@ def recg_all_qrcodes(qr_dir, result_file):
     print('recognizing QR codes...')
     counter = [0, 0, 0, 0, 0]
 
+    results = {}
+    for file_name in tqdm(os.listdir(qr_dir)):
+        img = cv2.imread(os.path.join(qr_dir, file_name))
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        status, result = process_qr(img)
+        results[file_name] = result
+        if status != -1:
+            counter[status] += 1
+    
+    pairs = sorted(results.items(), key=lambda x: x[0])
     with open(result_file, 'w') as f:
-        for file_name in tqdm(os.listdir(qr_dir)):
-            img = cv2.imread(os.path.join(qr_dir, file_name))
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            status, result = process_qr(img)
-            f.write('{} {}\n'.format(file_name, result))
-            if status != -1:
-                counter[status] += 1
+        for n, r in pairs:
+            f.write('{} {}\n'.format(n, r))
 
     total = sum(counter)
     print()
