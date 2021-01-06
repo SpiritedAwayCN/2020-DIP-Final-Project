@@ -1,3 +1,9 @@
 # 2020-DIP-Final-Project
 
-火车票二维码识别
+QR Code Recognition on railway tickets
+
+### Usage
+For more information, see:
+```sh
+$ python3 main.py --help
+```
