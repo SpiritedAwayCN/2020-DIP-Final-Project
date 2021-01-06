@@ -12,6 +12,8 @@ parser.add_argument('--img-dir', default='train', help='diretory of images')
 parser.add_argument('--tickets-dir', default='tickets', help='diretory of tickets')
 parser.add_argument('--qr-dir', default='qr', help='diretory of QR code')
 parser.add_argument('--output', default='predictions.txt', help='result file')
+parser.add_argument('-a', action='store_true', default=False,
+                        help='Applying hough algorithm')
 
 args = parser.parse_args()
 
@@ -118,6 +120,84 @@ def hoffle_fix(output1):
     # 裁剪一下边缘
     return fixed_img[outer_y>>1:shape_y-(outer_y>>1), outer_x>>1:shape_x-(outer_x>>1)]
 
+def solve_l(rho1, theta1, rho2, theta2):
+    # print(rho1, theta1, rho2, theta2)
+    A = np.array([[np.cos(theta1), np.sin(theta1)],
+                  [np.cos(theta2), np.sin(theta2)]])
+    B2 = np.array([[np.cos(theta1), rho1],
+                   [np.cos(theta2), rho2]])
+    B1 = np.array([[rho1, np.sin(theta1)],
+                   [rho2, np.sin(theta2)]])
+    A, B1, B2 = map(lambda x: np.linalg.det(x), (A, B1, B2))
+    return B1/A, B2/A
+
+def fetch_line2(lines):
+    cnt = 0
+    fetch_lines = np.zeros((4, 2))
+    for rho, theta in lines:
+        for i in range(cnt):
+            if abs(rho - fetch_lines[i][0]) < 50 and abs(theta - fetch_lines[i][1]) < np.pi / 180*3:
+                break
+        else:
+            fetch_lines[cnt][0], fetch_lines[cnt][1] = rho, theta
+            cnt += 1
+        if cnt == 4:
+            break
+    return fetch_lines
+
+def extract_tickets2(att_img):
+    blurred_img = cv2.medianBlur(att_img, 5)
+    _, thres_img = cv2.threshold(blurred_img, 80, 255, cv2.THRESH_BINARY)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (10, 10))
+    morphed_img = cv2.morphologyEx(thres_img, cv2.MORPH_CLOSE, kernel)
+    canny = cv2.Canny(morphed_img, 40, 150)
+    contours, _ = cv2.findContours(canny, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    max_contour ,max_area = 0, 0
+    for contour in contours:
+        tmp = cv2.contourArea(contour)
+        if tmp > max_area:
+            max_contour, max_area = contour, tmp
+    max_contour = max_contour[::-1, :, :]
+
+    edge = np.zeros((att_img.shape[0], att_img.shape[1], 3), dtype=np.int32)
+    cv2.drawContours(edge, [max_contour], -1, (255, 255, 255), 2)
+
+    edge2 = cv2.cvtColor(edge.astype(np.uint8), cv2.COLOR_BGR2GRAY)
+    lines = cv2.HoughLines(edge2, 1, np.pi / 180, 200)
+    lines = lines.squeeze()
+    # print(lines)
+    fetch_lines = fetch_line2(lines)
+    if abs(fetch_lines[0][1] - fetch_lines[1][1]) < np.pi / 180 * 25:  # 25度以内认为平行的
+        fetch_lines[[1, 2], :] = fetch_lines[[2, 1], :]
+    elif abs(fetch_lines[2][1] - fetch_lines[1][1]) < np.pi / 180 * 25:
+        fetch_lines[[0, 1], :] = fetch_lines[[1, 0], :]
+    # print(fetch_lines) 
+
+    points = [solve_l(*fetch_lines[i-1], *fetch_lines[i]) for i in range(4)]
+    points = np.around(np.array(points)).astype(np.int32)
+
+    c = np.cross(points[1]-points[0], points[2]-points[1])
+    if c > 0:   # 修正为右旋标价
+        points = points[::-1, :]
+
+    len1 = np.linalg.norm(points[0] - points[1])
+    len2 = np.linalg.norm(points[1] - points[2])
+    if len1 >= len2:    # 短边优先
+        points = np.roll(points, 1, axis=0)
+
+    if points[0][0] > points[2][0]: # y值小的优先
+        points = np.roll(points, 2, axis=0)
+
+    shape_x, shape_y = int(856 / 1.5), int(540 / 1.5) # 蓝票标准长宽比
+    outer_x, outer_y = 20, 20
+
+    N = np.array([[outer_x, outer_y], [outer_x, shape_y - outer_y], 
+                [shape_x - outer_x, shape_y - outer_y], [shape_x - outer_x, outer_y]])
+    mat = cv2.getPerspectiveTransform(points.astype(np.float32), N.astype(np.float32))
+    return cv2.warpPerspective(att_img, mat, (shape_x, shape_y))
+
+
 def crop_all_tickets(img_dir, ticket_dir):
     '''
     Crop all tickets
@@ -138,6 +218,22 @@ def crop_all_tickets(img_dir, ticket_dir):
             print("\nFail at {}: {}, skipped".format(file_name, e.args[0]))
     print('\ndone!')
 
+
+def crop_all_tickets_Hough(img_dir, ticket_dir):
+    print('cropping all tickets (using HoughLines)...')
+    if not os.path.exists(ticket_dir):
+        os.mkdir(ticket_dir)
+
+    for file_name in tqdm(os.listdir(img_dir)):
+        try:
+            img = cv2.imread(os.path.join(img_dir, file_name), cv2.IMREAD_GRAYSCALE)
+            ticket_img = extract_tickets2(img)
+            ticket_img = hoffle_fix(ticket_img)
+            ticket_img = rotate_if_reversed(ticket_img)
+            cv2.imwrite(os.path.join(ticket_dir, file_name), ticket_img)
+        except Exception as e:
+            print("\nFail at {}: {}, skipped".format(file_name, e.args[0]))
+    print('\ndone!')
 # =====================Part 1 End========================
 def fetch_line(lines, shape):
     lines = abs(lines) # 对rho取绝对值
@@ -361,11 +457,14 @@ def recg_all_qrcodes(qr_dir, result_file):
     print('Results were saved to {}.'.format(result_file))
 
 
-def main(img_dir, ticket_dir, qr_dir, result_file):
-    crop_all_tickets(img_dir, ticket_dir)
+def main(img_dir, ticket_dir, qr_dir, result_file, hough=False):
+    if hough==True:
+        crop_all_tickets_Hough(img_dir, ticket_dir)
+    else:
+        crop_all_tickets(img_dir, ticket_dir)
     crop_all_qrcodes(ticket_dir, qr_dir)
     recg_all_qrcodes(qr_dir, result_file)
     print('done!')
 
 if __name__ == "__main__":
-    main(args.img_dir, args.tickets_dir, args.qr_dir, args.output)
+    main(args.img_dir, args.tickets_dir, args.qr_dir, args.output, args.a)
